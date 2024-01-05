@@ -25,30 +25,8 @@ import math
 import numpy as np
 from skimage.util import random_noise
 from skimage import exposure
-
-def show_pic(img, bboxes=None):
-    '''
-    输入:
-        img:图像array
-        bboxes:图像的所有boudning box list, 格式为[[x_min, y_min, x_max, y_max]....]
-        names:每个box对应的名称
-    '''
-    cv2.imwrite('./1.jpg', img)
-    img = cv2.imread('./1.jpg')
-    for i in range(len(bboxes)):
-        bbox = bboxes[i]
-        x_min = bbox[0]
-        y_min = bbox[1]
-        x_max = bbox[2]
-        y_max = bbox[3]
-        cv2.rectangle(img,(int(x_min),int(y_min)),(int(x_max),int(y_max)),(0,255,0),3) 
-    cv2.namedWindow('pic', 0)  # 1表示原图
-    cv2.moveWindow('pic', 0, 0)
-    cv2.resizeWindow('pic', 1200,800)  # 可视化的图片大小
-    cv2.imshow('pic', img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows() 
-    os.remove('./1.jpg')
+from xml_helper import *   # 确保这个库能够正确解析和生成XML文件
+import xml.etree.ElementTree as ET
 
 # 图像均为cv2读取
 class DataAugmentForObjectDetection():
@@ -419,38 +397,102 @@ class DataAugmentForObjectDetection():
             print('\n')
         # print('------')
         return img, bboxes
-            
+
+def generate_new_xml(bboxes, save_dir, file_name, template_xml):
+    """
+    生成和保存新的XML文件。
+    参数:
+    - bboxes: 增强后的bounding boxes，格式为[[xmin, ymin, xmax, ymax], ...]
+    - save_dir: 保存新XML文件的目录
+    - file_name: 新XML文件的名称
+    - template_xml: 模板XML文件路径
+    """
+    # 解析模板XML文件
+    tree = ET.parse(template_xml)
+    root = tree.getroot()
+
+    # 更新文件名
+    for path in root.iter('filename'):
+        path.text = file_name
+
+    # 找到所有的object节点，假设所有的bounding box都需要更新
+    for object in root.findall('object'):
+        # 为了简化，我们假设每个object只有一个bounding box
+        bndbox = object.find('bndbox')
+        bbox = bboxes.pop(0)  # 获取一个新的bounding box并从列表中移除
+
+        # 更新坐标信息
+        bndbox.find('xmin').text = str(bbox[0])
+        bndbox.find('ymin').text = str(bbox[1])
+        bndbox.find('xmax').text = str(bbox[2])
+        bndbox.find('ymax').text = str(bbox[3])
+
+        # 如果bboxes已经更新完，删除多余的object节点
+        if not bboxes:
+            break
+
+    # 删除多余的object节点
+    while bboxes and object is not None:
+        root.remove(object)
+        object = root.find('object')
+
+    # 将更新后的XML保存到新文件
+    tree.write(os.path.join(save_dir, file_name))
 
 if __name__ == '__main__':
 
-    ### test ###
-
-    import shutil
-    from xml_helper import *
-
-    need_aug_num = 1                  
+    ### 更新 ###
 
     dataAug = DataAugmentForObjectDetection()
 
-    source_pic_root_path = 'C:/Users/ldyis/Documents/CudeDeteRecognize/CubeDateSet/cube_all_combine/images'
-    source_xml_root_path = 'C:/Users/ldyis/Documents/CudeDeteRecognize/CubeDateSet/cube_all_combine/annotations'
+    # 源文件夹路径
+    source_pic_root_path = 'C:/Users/ldyis/Documents/CudeDeteRecognize/CubeDateSet/cube_all_combine/images'  # 图片文件夹路径
+    source_xml_root_path = 'C:/Users/ldyis/Documents/CudeDeteRecognize/CubeDateSet/cube_all_combine/annotations'    # XML文件夹路径
 
-    
+    # 保存增强后的图片和XML文件的文件夹路径
+    saved_pic_root_path = 'C:/Users/ldyis/Documents/CudeDeteRecognize/CubeDateSet/cube_all_combine/augmented/images'
+    saved_xml_root_path = 'C:/Users/ldyis/Documents/CudeDeteRecognize/CubeDateSet/cube_all_combine/augmented/annotations'
+
+    if not os.path.exists(saved_pic_root_path):
+        os.makedirs(saved_pic_root_path)
+    if not os.path.exists(saved_xml_root_path):
+        os.makedirs(saved_xml_root_path)
+
+    # 获取所有文件的总数以计算进度
+    total_files = sum([len(files) for r, d, files in os.walk(source_pic_root_path)])
+    processed_files = 0
+
     for parent, _, files in os.walk(source_pic_root_path):
         for file in files:
-            cnt = 0
-            while cnt < need_aug_num:
+            # 只处理图片文件
+            if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                # 更新处理计数器并打印进度
+                processed_files += 1
+                print(f"处理中: {file} ({processed_files}/{total_files})")
+
+
+                # 读取图片和对应的XML文件
                 pic_path = os.path.join(parent, file)
-                xml_path = os.path.join(source_xml_root_path, file[:-4]+'.xml')
-                coords = parse_xml(xml_path)        #解析得到box信息，格式为[[x_min,y_min,x_max,y_max,name]]
+                xml_path = os.path.join(source_xml_root_path, file[:-4] + '.xml')
+
+                # 解析XML文件获取bboxes
+                coords = parse_xml(xml_path)  # 格式为[[x_min,y_min,x_max,y_max,name]]
                 coords = [coord[:4] for coord in coords]
 
+                # 读取图片
                 img = cv2.imread(pic_path)
-                show_pic(img, coords)    # 原图
 
+                # 应用数据增强
                 auged_img, auged_bboxes = dataAug.dataAugment(img, coords)
-                cnt += 1
 
-                show_pic(auged_img, auged_bboxes)  # 强化后的图
+                # 生成新的文件名
+                new_file_name = f"aug_{file}"
+                new_xml_name = f"aug_{file[:-4]}.xml"
 
+                # 保存增强后的图片
+                cv2.imwrite(os.path.join(saved_pic_root_path, new_file_name), auged_img)
 
+                # 生成和保存增强后的XML，这里需要一个原始的XML文件作为模板
+                generate_new_xml(auged_bboxes, saved_xml_root_path, new_xml_name, xml_path)
+
+    print("数据增强完成！")
